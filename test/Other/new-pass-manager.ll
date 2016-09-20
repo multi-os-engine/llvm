@@ -22,6 +22,7 @@
 ; CHECK-CGSCC-PASS-NEXT: Running pass: ModuleToPostOrderCGSCCPassAdaptor
 ; CHECK-CGSCC-PASS-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}>
 ; CHECK-CGSCC-PASS-NEXT: Running analysis: LazyCallGraphAnalysis
+; CHECK-CGSCC-PASS-NEXT: Running an SCC pass across the RefSCC: [(foo)]
 ; CHECK-CGSCC-PASS-NEXT: Starting llvm::LazyCallGraph::SCC pass manager run
 ; CHECK-CGSCC-PASS-NEXT: Running pass: NoOpCGSCCPass
 ; CHECK-CGSCC-PASS-NEXT: Finished llvm::LazyCallGraph::SCC pass manager run
@@ -314,6 +315,22 @@
 ; CHECK-AA: Running analysis: AAManager
 ; CHECK-AA: Running analysis: BasicAA
 ; CHECK-AA: Finished llvm::Module pass manager run
+
+; RUN: opt -disable-output -disable-verify -debug-pass-manager %s 2>&1 \
+; RUN:     -passes='require<memdep>' \
+; RUN:     | FileCheck %s --check-prefix=CHECK-MEMDEP
+; CHECK-MEMDEP: Starting llvm::Module pass manager run
+; CHECK-MEMDEP: Running pass: RequireAnalysisPass
+; CHECK-MEMDEP: Running analysis: MemoryDependenceAnalysis
+; CHECK-MEMDEP: Finished llvm::Module pass manager run
+
+; RUN: opt -disable-output -disable-verify -debug-pass-manager %s 2>&1 \
+; RUN:     -passes='require<callgraph>' \
+; RUN:     | FileCheck %s --check-prefix=CHECK-CALLGRAPH
+; CHECK-CALLGRAPH: Starting llvm::Module pass manager run
+; CHECK-CALLGRAPH: Running pass: RequireAnalysisPass
+; CHECK-CALLGRAPH: Running analysis: CallGraphAnalysis
+; CHECK-CALLGRAPH: Finished llvm::Module pass manager run
 
 ; RUN: opt -disable-output -disable-verify -debug-pass-manager \
 ; RUN:     -passes='default<O0>' %s 2>&1 \

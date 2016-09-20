@@ -397,7 +397,7 @@ void MappingTraits<COFFYAML::PEHeader>::mapping(IO &IO,
   IO.mapOptional("CertificateTable", PH.DataDirectories[COFF::CERTIFICATE_TABLE]);
   IO.mapOptional("BaseRelocationTable",
                  PH.DataDirectories[COFF::BASE_RELOCATION_TABLE]);
-  IO.mapOptional("Debug", PH.DataDirectories[COFF::DEBUG]);
+  IO.mapOptional("Debug", PH.DataDirectories[COFF::DEBUG_DIRECTORY]);
   IO.mapOptional("Architecture", PH.DataDirectories[COFF::ARCHITECTURE]);
   IO.mapOptional("GlobalPtr", PH.DataDirectories[COFF::GLOBAL_PTR]);
   IO.mapOptional("TlsTable", PH.DataDirectories[COFF::TLS_TABLE]);
@@ -487,12 +487,13 @@ void MappingTraits<COFFYAML::Section>::mapping(IO &IO, COFFYAML::Section &Sec) {
   IO.mapRequired("Characteristics", NC->Characteristics);
   IO.mapOptional("VirtualAddress", Sec.Header.VirtualAddress, 0U);
   IO.mapOptional("VirtualSize", Sec.Header.VirtualSize, 0U);
-  IO.mapOptional("Alignment", Sec.Alignment);
+  IO.mapOptional("Alignment", Sec.Alignment, 0U);
   IO.mapRequired("SectionData", Sec.SectionData);
   IO.mapOptional("Relocations", Sec.Relocations);
 }
 
 void MappingTraits<COFFYAML::Object>::mapping(IO &IO, COFFYAML::Object &Obj) {
+  IO.mapTag("!COFF", true);
   IO.mapOptional("OptionalHeader", Obj.OptionalHeader);
   IO.mapRequired("header", Obj.Header);
   IO.mapRequired("sections", Obj.Sections);

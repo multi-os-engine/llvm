@@ -7,9 +7,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/IR/PassManager.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/PassManager.h"
 
 using namespace llvm;
 
@@ -20,6 +20,5 @@ template class PassManager<Function>;
 template class AnalysisManager<Module>;
 template class AnalysisManager<Function>;
 template class InnerAnalysisManagerProxy<FunctionAnalysisManager, Module>;
-template class AnalysisBase<FunctionAnalysisManagerModuleProxy>;
 template class OuterAnalysisManagerProxy<ModuleAnalysisManager, Function>;
 }

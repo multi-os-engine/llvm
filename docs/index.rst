@@ -1,11 +1,6 @@
 Overview
 ========
 
-.. warning::
-
-   If you are using a released version of LLVM, see `the download page
-   <http://llvm.org/releases/>`_ to find your documentation.
-
 The LLVM compiler infrastructure supports a wide range of projects, from
 industrial strength compilers to specialized JIT applications to small
 research projects.
@@ -65,6 +60,8 @@ representation.
    :hidden:
 
    CMake
+   CMakePrimer
+   AdvancedBuilds
    HowToBuildOnARM
    HowToCrossCompileLLVM
    CommandGuide/index
@@ -85,7 +82,9 @@ representation.
    GetElementPtr
    Frontend/PerformanceTips
    MCJITDesignAndImplementation
+   CodeOfConduct
    CompileCudaWithLLVM
+   ReportingGuide
 
 :doc:`GettingStarted`
    Discusses how to get up and running quickly with the LLVM infrastructure.
@@ -174,6 +173,7 @@ For developers of applications which use LLVM as a library.
    ProgrammersManual
    Extensions
    LibFuzzer
+   ScudoHardenedAllocator
 
 :doc:`LLVM Language Reference Manual <LangRef>`
   Defines the LLVM intermediate representation and the assembly form of the
@@ -218,6 +218,9 @@ For developers of applications which use LLVM as a library.
 :doc:`LibFuzzer`
   A library for writing in-process guided fuzzers.
 
+:doc:`ScudoHardenedAllocator`
+  A library that implements a security-hardened `malloc()`.
+
 Subsystem Documentation
 =======================
 
@@ -255,7 +258,7 @@ For API clients and LLVM developers.
    CoverageMappingFormat
    Statepoints
    MergeFunctions
-   BitSets
+   TypeMetadata
    FaultMaps
    MIRLangRef
 

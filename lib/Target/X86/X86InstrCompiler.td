@@ -99,18 +99,6 @@ def VAARG_64 : I<0, Pseudo,
                     (X86vaarg64 addr:$ap, imm:$size, imm:$mode, imm:$align)),
                   (implicit EFLAGS)]>;
 
-// Dynamic stack allocation yields a _chkstk or _alloca call for all Windows
-// targets.  These calls are needed to probe the stack when allocating more than
-// 4k bytes in one go. Touching the stack at 4K increments is necessary to
-// ensure that the guard pages used by the OS virtual memory manager are
-// allocated in correct sequence.
-// The main point of having separate instruction are extra unmodelled effects
-// (compared to ordinary calls) like stack pointer change.
-
-let Defs = [EAX, ESP, EFLAGS], Uses = [ESP] in
-  def WIN_ALLOCA : I<0, Pseudo, (outs), (ins),
-                     "# dynamic stack allocation",
-                     [(X86WinAlloca)]>;
 
 // When using segmented stacks these are lowered into instructions which first
 // check if the current stacklet has enough free memory. If it does, memory is
@@ -131,6 +119,27 @@ def SEG_ALLOCA_64 : I<0, Pseudo, (outs GR64:$dst), (ins GR64:$size),
                          (X86SegAlloca GR64:$size))]>,
                     Requires<[In64BitMode]>;
 }
+
+// Dynamic stack allocation yields a _chkstk or _alloca call for all Windows
+// targets.  These calls are needed to probe the stack when allocating more than
+// 4k bytes in one go. Touching the stack at 4K increments is necessary to
+// ensure that the guard pages used by the OS virtual memory manager are
+// allocated in correct sequence.
+// The main point of having separate instruction are extra unmodelled effects
+// (compared to ordinary calls) like stack pointer change.
+
+let Defs = [EAX, ESP, EFLAGS], Uses = [ESP] in
+def WIN_ALLOCA_32 : I<0, Pseudo, (outs), (ins GR32:$size),
+                     "# dynamic stack allocation",
+                     [(X86WinAlloca GR32:$size)]>,
+                     Requires<[NotLP64]>;
+
+let Defs = [RAX, RSP, EFLAGS], Uses = [RSP] in
+def WIN_ALLOCA_64 : I<0, Pseudo, (outs), (ins GR64:$size),
+                     "# dynamic stack allocation",
+                     [(X86WinAlloca GR64:$size)]>,
+                     Requires<[In64BitMode]>;
+
 
 //===----------------------------------------------------------------------===//
 // EH Pseudo Instructions
@@ -250,7 +259,7 @@ def MORESTACK_RET_RESTORE_R10 : I<0, Pseudo, (outs), (ins),
 // Alias instruction mapping movr0 to xor.
 // FIXME: remove when we can teach regalloc that xor reg, reg is ok.
 let Defs = [EFLAGS], isReMaterializable = 1, isAsCheapAsAMove = 1,
-    isPseudo = 1 in
+    isPseudo = 1, AddedComplexity = 20 in
 def MOV32r0  : I<0, Pseudo, (outs GR32:$dst), (ins), "",
                  [(set GR32:$dst, 0)], IIC_ALU_NONMEM>, Sched<[WriteZero]>;
 
@@ -263,7 +272,7 @@ def : Pat<(i64 0), (SUBREG_TO_REG (i64 0), (MOV32r0), sub_32bit)> {
 }
 
 let Predicates = [OptForSize, NotSlowIncDec, Not64BitMode],
-    AddedComplexity = 1 in {
+    AddedComplexity = 15 in {
   // Pseudo instructions for materializing 1 and -1 using XOR+INC/DEC,
   // which only require 3 bytes compared to MOV32ri which requires 5.
   let Defs = [EFLAGS], isReMaterializable = 1, isPseudo = 1 in {
@@ -276,6 +285,17 @@ let Predicates = [OptForSize, NotSlowIncDec, Not64BitMode],
   // MOV16ri is 4 bytes, so the instructions above are smaller.
   def : Pat<(i16 1), (EXTRACT_SUBREG (MOV32r1), sub_16bit)>;
   def : Pat<(i16 -1), (EXTRACT_SUBREG (MOV32r_1), sub_16bit)>;
+}
+
+let isReMaterializable = 1, isPseudo = 1, AddedComplexity = 10 in {
+// AddedComplexity higher than MOV64ri but lower than MOV32r0 and MOV32r1.
+// FIXME: Add itinerary class and Schedule.
+def MOV32ImmSExti8 : I<0, Pseudo, (outs GR32:$dst), (ins i32i8imm:$src), "",
+                       [(set GR32:$dst, i32immSExt8:$src)]>,
+                     Requires<[OptForMinSize, NotWin64WithoutFP]>;
+def MOV64ImmSExti8 : I<0, Pseudo, (outs GR64:$dst), (ins i64i8imm:$src), "",
+                       [(set GR64:$dst, i64immSExt8:$src)]>,
+                     Requires<[OptForMinSize, NotWin64WithoutFP]>;
 }
 
 // Materialize i64 constant where top 32-bits are zero. This could theoretically
@@ -479,10 +499,13 @@ def TLSCall_32 : I<0, Pseudo, (outs), (ins i32mem:$sym),
                 [(X86TLSCall addr:$sym)]>,
                 Requires<[Not64BitMode]>;
 
-// For x86_64, the address of the thunk is passed in %rdi, on return
-// the address of the variable is in %rax.  All other registers are preserved.
+// For x86_64, the address of the thunk is passed in %rdi, but the
+// pseudo directly use the symbol, so do not add an implicit use of
+// %rdi. The lowering will do the right thing with RDI.
+// On return the address of the variable is in %rax.  All other
+// registers are preserved.
 let Defs = [RAX, EFLAGS],
-    Uses = [RSP, RDI],
+    Uses = [RSP],
     usesCustomInserter = 1 in
 def TLSCall_64 : I<0, Pseudo, (outs), (ins i64mem:$sym),
                   "# TLSCall_64",
@@ -657,7 +680,7 @@ def NAME#64mi8 : RIi8<{ImmOpc8{7}, ImmOpc8{6}, ImmOpc8{5}, ImmOpc8{4},
                        ImmMod, (outs), (ins i64mem :$dst, i64i8imm :$src2),
                        !strconcat(mnemonic, "{q}\t",
                                   "{$src2, $dst|$dst, $src2}"),
-                       [(set EFLAGS, (Op addr:$dst, i64immSExt32:$src2))],
+                       [(set EFLAGS, (Op addr:$dst, i64immSExt8:$src2))],
                        IIC_ALU_MEM>, LOCK;
 
 }
@@ -737,11 +760,57 @@ defm LCMPXCHG8B : LCMPXCHG_UnOp<0xC7, MRM1m, "cmpxchg8b",
                                 IIC_CMPX_LOCK_8B>;
 }
 
+// This pseudo must be used when the frame uses RBX as
+// the base pointer. Indeed, in such situation RBX is a reserved
+// register and the register allocator will ignore any use/def of
+// it. In other words, the register will not fix the clobbering of
+// RBX that will happen when setting the arguments for the instrucion.
+// 
+// Unlike the actual related instuction, we mark that this one
+// defines EBX (instead of using EBX).
+// The rationale is that we will define RBX during the expansion of
+// the pseudo. The argument feeding EBX is ebx_input.
+//
+// The additional argument, $ebx_save, is a temporary register used to
+// save the value of RBX accross the actual instruction.
+//
+// To make sure the register assigned to $ebx_save does not interfere with
+// the definition of the actual instruction, we use a definition $dst which
+// is tied to $rbx_save. That way, the live-range of $rbx_save spans accross
+// the instruction and we are sure we will have a valid register to restore
+// the value of RBX.
+let Defs = [EAX, EDX, EBX, EFLAGS], Uses = [EAX, ECX, EDX],
+    SchedRW = [WriteALULd, WriteRMW], isCodeGenOnly = 1, isPseudo = 1,
+    Constraints = "$ebx_save = $dst", usesCustomInserter = 1 in {
+def LCMPXCHG8B_SAVE_EBX :
+    I<0, Pseudo, (outs GR32:$dst),
+      (ins i64mem:$ptr, GR32:$ebx_input, GR32:$ebx_save),
+      !strconcat("cmpxchg8b", "\t$ptr"),
+      [(set GR32:$dst, (X86cas8save_ebx addr:$ptr, GR32:$ebx_input,
+                                        GR32:$ebx_save))],
+      IIC_CMPX_LOCK_8B>;
+}
+
+
 let Defs = [RAX, RDX, EFLAGS], Uses = [RAX, RBX, RCX, RDX],
     Predicates = [HasCmpxchg16b], SchedRW = [WriteALULd, WriteRMW] in {
 defm LCMPXCHG16B : LCMPXCHG_UnOp<0xC7, MRM1m, "cmpxchg16b",
                                  X86cas16, i128mem,
                                  IIC_CMPX_LOCK_16B>, REX_W;
+}
+
+// Same as LCMPXCHG8B_SAVE_RBX but for the 16 Bytes variant.
+let Defs = [RAX, RDX, RBX, EFLAGS], Uses = [RAX, RCX, RDX],
+    Predicates = [HasCmpxchg16b], SchedRW = [WriteALULd, WriteRMW],
+    isCodeGenOnly = 1, isPseudo = 1, Constraints = "$rbx_save = $dst",
+    usesCustomInserter = 1 in {
+def LCMPXCHG16B_SAVE_RBX :
+    I<0, Pseudo, (outs GR64:$dst),
+      (ins i128mem:$ptr, GR64:$rbx_input, GR64:$rbx_save),
+      !strconcat("cmpxchg16b", "\t$ptr"),
+      [(set GR64:$dst, (X86cas16save_rbx addr:$ptr, GR64:$rbx_input,
+                                                    GR64:$rbx_save))],
+      IIC_CMPX_LOCK_16B>;
 }
 
 defm LCMPXCHG : LCMPXCHG_BinOp<0xB0, 0xB1, MRMDestMem, "cmpxchg",
@@ -944,6 +1013,18 @@ def ACQUIRE_MOV64rm : I<0, Pseudo, (outs GR64:$dst), (ins i64mem:$src),
 // DAG Pattern Matching Rules
 //===----------------------------------------------------------------------===//
 
+// Use AND/OR to store 0/-1 in memory when optimizing for minsize. This saves
+// binary size compared to a regular MOV, but it introduces an unnecessary
+// load, so is not suitable for regular or optsize functions.
+let Predicates = [OptForMinSize] in {
+def : Pat<(store (i16 0), addr:$dst), (AND16mi8 addr:$dst, 0)>;
+def : Pat<(store (i32 0), addr:$dst), (AND32mi8 addr:$dst, 0)>;
+def : Pat<(store (i64 0), addr:$dst), (AND64mi8 addr:$dst, 0)>;
+def : Pat<(store (i16 -1), addr:$dst), (OR16mi8 addr:$dst, -1)>;
+def : Pat<(store (i32 -1), addr:$dst), (OR32mi8 addr:$dst, -1)>;
+def : Pat<(store (i64 -1), addr:$dst), (OR64mi8 addr:$dst, -1)>;
+}
+
 // ConstantPool GlobalAddress, ExternalSymbol, and JumpTable
 def : Pat<(i32 (X86Wrapper tconstpool  :$dst)), (MOV32ri tconstpool  :$dst)>;
 def : Pat<(i32 (X86Wrapper tjumptable  :$dst)), (MOV32ri tjumptable  :$dst)>;
@@ -1012,22 +1093,22 @@ def : Pat<(i64 (X86Wrapper tblockaddress:$dst)),
 // for MOV64mi32 should handle this sort of thing.
 def : Pat<(store (i64 (X86Wrapper tconstpool:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, tconstpool:$src)>,
-          Requires<[NearData, IsStatic]>;
+          Requires<[NearData, IsNotPIC]>;
 def : Pat<(store (i64 (X86Wrapper tjumptable:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, tjumptable:$src)>,
-          Requires<[NearData, IsStatic]>;
+          Requires<[NearData, IsNotPIC]>;
 def : Pat<(store (i64 (X86Wrapper tglobaladdr:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, tglobaladdr:$src)>,
-          Requires<[NearData, IsStatic]>;
+          Requires<[NearData, IsNotPIC]>;
 def : Pat<(store (i64 (X86Wrapper texternalsym:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, texternalsym:$src)>,
-          Requires<[NearData, IsStatic]>;
+          Requires<[NearData, IsNotPIC]>;
 def : Pat<(store (i64 (X86Wrapper mcsym:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, mcsym:$src)>,
-          Requires<[NearData, IsStatic]>;
+          Requires<[NearData, IsNotPIC]>;
 def : Pat<(store (i64 (X86Wrapper tblockaddress:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, tblockaddress:$src)>,
-          Requires<[NearData, IsStatic]>;
+          Requires<[NearData, IsNotPIC]>;
 
 def : Pat<(i32 (X86RecoverFrameAlloc mcsym:$dst)), (MOV32ri mcsym:$dst)>;
 def : Pat<(i64 (X86RecoverFrameAlloc mcsym:$dst)), (MOV64ri mcsym:$dst)>;
@@ -1324,7 +1405,7 @@ def : Pat<(store (add (loadi64 addr:$dst), 128), addr:$dst),
 // instructions.
 def : Pat<(add GR64:$src1, 0x0000000080000000),
           (SUB64ri32 GR64:$src1, 0xffffffff80000000)>;
-def : Pat<(store (add (loadi64 addr:$dst), 0x00000000800000000), addr:$dst),
+def : Pat<(store (add (loadi64 addr:$dst), 0x0000000080000000), addr:$dst),
           (SUB64mi32 addr:$dst, 0xffffffff80000000)>;
 
 // To avoid needing to materialize an immediate in a register, use a 32-bit and
@@ -1466,6 +1547,10 @@ def : Pat<(i8 (trunc GR16:$src)),
 
 // h-register tricks
 def : Pat<(i8 (trunc (srl_su GR16:$src, (i8 8)))),
+          (EXTRACT_SUBREG (i16 (COPY_TO_REGCLASS GR16:$src, GR16_ABCD)),
+                          sub_8bit_hi)>,
+      Requires<[Not64BitMode]>;
+def : Pat<(i8 (trunc (srl_su (i32 (anyext GR16:$src)), (i8 8)))),
           (EXTRACT_SUBREG (i16 (COPY_TO_REGCLASS GR16:$src, GR16_ABCD)),
                           sub_8bit_hi)>,
       Requires<[Not64BitMode]>;

@@ -34,7 +34,7 @@ public:
 
   TestModuleAnalysis(int &Runs) : Runs(Runs) {}
 
-  Result run(Module &M, ModuleAnalysisManager *AM) {
+  Result run(Module &M, ModuleAnalysisManager &AM) {
     ++Runs;
     return Result(M.size());
   }
@@ -59,7 +59,7 @@ public:
 
   TestSCCAnalysis(int &Runs) : Runs(Runs) {}
 
-  Result run(LazyCallGraph::SCC &C, CGSCCAnalysisManager *AM) {
+  Result run(LazyCallGraph::SCC &C, CGSCCAnalysisManager &AM) {
     ++Runs;
     return Result(C.size());
   }
@@ -84,7 +84,7 @@ public:
 
   TestFunctionAnalysis(int &Runs) : Runs(Runs) {}
 
-  Result run(Function &F, FunctionAnalysisManager *AM) {
+  Result run(Function &F, FunctionAnalysisManager &AM) {
     ++Runs;
     int Count = 0;
     for (Instruction &I : instructions(F)) {
@@ -113,7 +113,7 @@ public:
 
   TestImmutableFunctionAnalysis(int &Runs) : Runs(Runs) {}
 
-  Result run(Function &F, FunctionAnalysisManager *AM) {
+  Result run(Function &F, FunctionAnalysisManager &AM) {
     ++Runs;
     return Result();
   }
@@ -129,9 +129,9 @@ char TestImmutableFunctionAnalysis::PassID;
 struct TestModulePass {
   TestModulePass(int &RunCount) : RunCount(RunCount) {}
 
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager *AM) {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
     ++RunCount;
-    (void)AM->getResult<TestModuleAnalysis>(M);
+    (void)AM.getResult<TestModuleAnalysis>(M);
     return PreservedAnalyses::all();
   }
 
@@ -142,21 +142,20 @@ struct TestModulePass {
 
 struct TestSCCPass {
   TestSCCPass(int &RunCount, int &AnalyzedInstrCount,
-                   int &AnalyzedSCCFunctionCount,
-                   int &AnalyzedModuleFunctionCount,
-                   bool OnlyUseCachedResults = false)
+              int &AnalyzedSCCFunctionCount, int &AnalyzedModuleFunctionCount,
+              bool OnlyUseCachedResults = false)
       : RunCount(RunCount), AnalyzedInstrCount(AnalyzedInstrCount),
         AnalyzedSCCFunctionCount(AnalyzedSCCFunctionCount),
         AnalyzedModuleFunctionCount(AnalyzedModuleFunctionCount),
         OnlyUseCachedResults(OnlyUseCachedResults) {}
 
-  PreservedAnalyses run(LazyCallGraph::SCC &C, CGSCCAnalysisManager *AM) {
+  PreservedAnalyses run(LazyCallGraph::SCC &C, CGSCCAnalysisManager &AM) {
     ++RunCount;
 
     const ModuleAnalysisManager &MAM =
-        AM->getResult<ModuleAnalysisManagerCGSCCProxy>(C).getManager();
+        AM.getResult<ModuleAnalysisManagerCGSCCProxy>(C).getManager();
     FunctionAnalysisManager &FAM =
-        AM->getResult<FunctionAnalysisManagerCGSCCProxy>(C).getManager();
+        AM.getResult<FunctionAnalysisManagerCGSCCProxy>(C).getManager();
     if (TestModuleAnalysis::Result *TMA =
             MAM.getCachedResult<TestModuleAnalysis>(
                 *C.begin()->getFunction().getParent()))
@@ -164,8 +163,7 @@ struct TestSCCPass {
 
     if (OnlyUseCachedResults) {
       // Hack to force the use of the cached interface.
-      if (TestSCCAnalysis::Result *AR =
-              AM->getCachedResult<TestSCCAnalysis>(C))
+      if (TestSCCAnalysis::Result *AR = AM.getCachedResult<TestSCCAnalysis>(C))
         AnalyzedSCCFunctionCount += AR->FunctionCount;
       for (LazyCallGraph::Node &N : C)
         if (TestFunctionAnalysis::Result *FAR =
@@ -173,7 +171,7 @@ struct TestSCCPass {
           AnalyzedInstrCount += FAR->InstructionCount;
     } else {
       // Typical path just runs the analysis as needed.
-      TestSCCAnalysis::Result &AR = AM->getResult<TestSCCAnalysis>(C);
+      TestSCCAnalysis::Result &AR = AM.getResult<TestSCCAnalysis>(C);
       AnalyzedSCCFunctionCount += AR.FunctionCount;
       for (LazyCallGraph::Node &N : C) {
         TestFunctionAnalysis::Result &FAR =
@@ -200,7 +198,7 @@ struct TestSCCPass {
 struct TestFunctionPass {
   TestFunctionPass(int &RunCount) : RunCount(RunCount) {}
 
-  PreservedAnalyses run(Function &M) {
+  PreservedAnalyses run(Function &F, AnalysisManager<Function> &) {
     ++RunCount;
     return PreservedAnalyses::none();
   }
@@ -211,53 +209,47 @@ struct TestFunctionPass {
 };
 
 std::unique_ptr<Module> parseIR(const char *IR) {
-  LLVMContext &C = getGlobalContext();
+  // We just use a static context here. This is never called from multiple
+  // threads so it is harmless no matter how it is implemented. We just need
+  // the context to outlive the module which it does.
+  static LLVMContext C;
   SMDiagnostic Err;
   return parseAssemblyString(IR, Err, C);
 }
 
-class CGSCCPassManagerTest : public ::testing::Test {
-protected:
-  std::unique_ptr<Module> M;
-
-public:
-  CGSCCPassManagerTest()
-      : M(parseIR("define void @f() {\n"
-                  "entry:\n"
-                  "  call void @g()\n"
-                  "  call void @h1()\n"
-                  "  ret void\n"
-                  "}\n"
-                  "define void @g() {\n"
-                  "entry:\n"
-                  "  call void @g()\n"
-                  "  call void @x()\n"
-                  "  ret void\n"
-                  "}\n"
-                  "define void @h1() {\n"
-                  "entry:\n"
-                  "  call void @h2()\n"
-                  "  ret void\n"
-                  "}\n"
-                  "define void @h2() {\n"
-                  "entry:\n"
-                  "  call void @h3()\n"
-                  "  call void @x()\n"
-                  "  ret void\n"
-                  "}\n"
-                  "define void @h3() {\n"
-                  "entry:\n"
-                  "  call void @h1()\n"
-                  "  ret void\n"
-                  "}\n"
-                  "define void @x() {\n"
-                  "entry:\n"
-                  "  ret void\n"
-                  "}\n"
-                  )) {}
-};
-
-TEST_F(CGSCCPassManagerTest, Basic) {
+TEST(CGSCCPassManagerTest, Basic) {
+  auto M = parseIR("define void @f() {\n"
+                   "entry:\n"
+                   "  call void @g()\n"
+                   "  call void @h1()\n"
+                   "  ret void\n"
+                   "}\n"
+                   "define void @g() {\n"
+                   "entry:\n"
+                   "  call void @g()\n"
+                   "  call void @x()\n"
+                   "  ret void\n"
+                   "}\n"
+                   "define void @h1() {\n"
+                   "entry:\n"
+                   "  call void @h2()\n"
+                   "  ret void\n"
+                   "}\n"
+                   "define void @h2() {\n"
+                   "entry:\n"
+                   "  call void @h3()\n"
+                   "  call void @x()\n"
+                   "  ret void\n"
+                   "}\n"
+                   "define void @h3() {\n"
+                   "entry:\n"
+                   "  call void @h1()\n"
+                   "  ret void\n"
+                   "}\n"
+                   "define void @x() {\n"
+                   "entry:\n"
+                   "  ret void\n"
+                   "}\n");
   FunctionAnalysisManager FAM(/*DebugLogging*/ true);
   int FunctionAnalysisRuns = 0;
   FAM.registerPass([&] { return TestFunctionAnalysis(FunctionAnalysisRuns); });
@@ -301,7 +293,7 @@ TEST_F(CGSCCPassManagerTest, Basic) {
   CGPM1.addPass(createCGSCCToFunctionPassAdaptor(std::move(FPM1)));
   MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGPM1)));
 
-  MPM.run(*M, &MAM);
+  MPM.run(*M, MAM);
 
   EXPECT_EQ(1, ModulePassRunCount1);
 

@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/LTO/LTOModule.h"
+#include "llvm/LTO/legacy/LTOModule.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/CodeGen/Analysis.h"
@@ -33,7 +33,6 @@
 #include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Object/IRObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -75,6 +74,18 @@ bool LTOModule::isBitcodeFile(const char *Path) {
   return bool(BCData);
 }
 
+bool LTOModule::isThinLTO() {
+  // Right now the detection is only based on the summary presence. We may want
+  // to add a dedicated flag at some point.
+  return hasGlobalValueSummary(IRFile->getMemoryBufferRef(),
+                            [](const DiagnosticInfo &DI) {
+                              DiagnosticPrinterRawOStream DP(errs());
+                              DI.print(DP);
+                              errs() << '\n';
+                              return;
+                            });
+}
+
 bool LTOModule::isBitcodeForTarget(MemoryBuffer *Buffer,
                                    StringRef TriplePrefix) {
   ErrorOr<MemoryBufferRef> BCOrErr =
@@ -97,7 +108,7 @@ std::string LTOModule::getProducerString(MemoryBuffer *Buffer) {
 
 ErrorOr<std::unique_ptr<LTOModule>>
 LTOModule::createFromFile(LLVMContext &Context, const char *path,
-                          TargetOptions options) {
+                          const TargetOptions &options) {
   ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr =
       MemoryBuffer::getFile(path);
   if (std::error_code EC = BufferOrErr.getError()) {
@@ -111,14 +122,14 @@ LTOModule::createFromFile(LLVMContext &Context, const char *path,
 
 ErrorOr<std::unique_ptr<LTOModule>>
 LTOModule::createFromOpenFile(LLVMContext &Context, int fd, const char *path,
-                              size_t size, TargetOptions options) {
+                              size_t size, const TargetOptions &options) {
   return createFromOpenFileSlice(Context, fd, path, size, 0, options);
 }
 
 ErrorOr<std::unique_ptr<LTOModule>>
 LTOModule::createFromOpenFileSlice(LLVMContext &Context, int fd,
                                    const char *path, size_t map_size,
-                                   off_t offset, TargetOptions options) {
+                                   off_t offset, const TargetOptions &options) {
   ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr =
       MemoryBuffer::getOpenFileSlice(fd, path, map_size, offset);
   if (std::error_code EC = BufferOrErr.getError()) {
@@ -132,7 +143,7 @@ LTOModule::createFromOpenFileSlice(LLVMContext &Context, int fd,
 
 ErrorOr<std::unique_ptr<LTOModule>>
 LTOModule::createFromBuffer(LLVMContext &Context, const void *mem,
-                            size_t length, TargetOptions options,
+                            size_t length, const TargetOptions &options,
                             StringRef path) {
   StringRef Data((const char *)mem, length);
   MemoryBufferRef Buffer(Data, path);
@@ -142,7 +153,7 @@ LTOModule::createFromBuffer(LLVMContext &Context, const void *mem,
 ErrorOr<std::unique_ptr<LTOModule>>
 LTOModule::createInLocalContext(std::unique_ptr<LLVMContext> Context,
                                 const void *mem, size_t length,
-                                TargetOptions options, StringRef path) {
+                                const TargetOptions &options, StringRef path) {
   StringRef Data((const char *)mem, length);
   MemoryBufferRef Buffer(Data, path);
   // If we own a context, we know this is being used only for symbol extraction,
@@ -185,7 +196,7 @@ parseBitcodeFileImpl(MemoryBufferRef Buffer, LLVMContext &Context,
 }
 
 ErrorOr<std::unique_ptr<LTOModule>>
-LTOModule::makeLTOModule(MemoryBufferRef Buffer, TargetOptions options,
+LTOModule::makeLTOModule(MemoryBufferRef Buffer, const TargetOptions &options,
                          LLVMContext &Context, bool ShouldBeLazy) {
   ErrorOr<std::unique_ptr<Module>> MOrErr =
       parseBitcodeFileImpl(Buffer, Context, ShouldBeLazy);
@@ -219,8 +230,8 @@ LTOModule::makeLTOModule(MemoryBufferRef Buffer, TargetOptions options,
       CPU = "cyclone";
   }
 
-  TargetMachine *target = march->createTargetMachine(TripleStr, CPU, FeatureStr,
-                                                     options);
+  TargetMachine *target =
+      march->createTargetMachine(TripleStr, CPU, FeatureStr, options, None);
   M->setDataLayout(target->createDataLayout());
 
   std::unique_ptr<object::IRObjectFile> IRObj(
